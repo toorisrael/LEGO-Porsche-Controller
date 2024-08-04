@@ -29,3 +29,15 @@ exit
 Disconnected
 ```
 Add -debug to print sending commands and controller inputs
+
+Sources used for creating this project:
+
+[Pybricks](https://github.com/pybricks/)
+
+[SharpBrick.PoweredUp](https://github.com/sharpbrick/powered-up)
+
+[brickcontroller2](https://github.com/imurvai/brickcontroller2/)
+
+[bleak](https://github.com/hbldh/bleak)
+
+[pygame](https://github.com/pygame)
