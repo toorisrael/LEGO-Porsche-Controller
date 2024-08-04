@@ -11,6 +11,7 @@ import pygame
 engine1 = 0x32  # Byte value for the first engine channel
 engine2 = 0x33  # Byte value for the second engine channel
 debug = False
+last_power = 0
 
 DEVICE_NAME = "Technic Move  "
 CHARACTERISTIC_UUID = "00001624-1212-efde-1623-785feabcd123"
@@ -102,7 +103,7 @@ async def request_hub_properties(client, characteristic_uuid):
     return firmware_version, hardware_version, battery_percentage
 
 def handle_controller_events(joystick, client):
-    global debug, power_input
+    global debug, power_input, last_power
     for event in pygame.event.get():
         if event.type == pygame.JOYAXISMOTION:
             left_trigger = joystick.get_axis(4)
@@ -110,8 +111,12 @@ def handle_controller_events(joystick, client):
             power_input = ((-left_trigger + right_trigger) * 100) / 2
             if debug:
                 print(f"power_input: {power_input:.2f}")
-            asyncio.create_task(send_motor_command(client, engine1, -power_input))
-            asyncio.create_task(send_motor_command(client, engine2, power_input))
+            if abs(power_input) < 20:
+                power_input = 0
+            if abs(power_input - last_power) > 5:
+                last_power = power_input
+                asyncio.create_task(send_motor_command(client, engine1, -power_input))
+                asyncio.create_task(send_motor_command(client, engine2, power_input))
 
 async def read_input():
     loop = asyncio.get_event_loop()
