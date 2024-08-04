@@ -154,6 +154,7 @@ async def main():
         print(f"Device '{DEVICE_NAME}' not found.")
         return
 
+    await client.pair()
     firmware_version, hardware_version, battery_percentage = await request_hub_properties(client, CHARACTERISTIC_UUID)
     print(f"Connected to {DEVICE_NAME}")
     print(f"Firmware Version: {firmware_version}")
@@ -165,6 +166,7 @@ async def main():
     
     if pygame.joystick.get_count() == 0:
         print("No joystick found")
+        await client.disconnect()
         return
     
     joystick = pygame.joystick.Joystick(0)
