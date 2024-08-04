@@ -102,7 +102,7 @@ async def request_hub_properties(client, characteristic_uuid):
 
     return firmware_version, hardware_version, battery_percentage
 
-def handle_controller_events(joystick, client):
+def handle_controller_events(client):
     global debug, power_input, last_power
     for event in pygame.event.get():
         if event.type == pygame.JOYAXISMOTION:
@@ -183,12 +183,12 @@ async def main():
         pass
 
     await client.disconnect()
-    print("\nDisconnected")
+    print("Disconnected")
 
 async def controller_event_loop(stop_event):
     try:
         while not stop_event.is_set():
-            handle_controller_events(joystick, client)
+            handle_controller_events(client)
             await asyncio.sleep(0.05)
     except KeyboardInterrupt:
         pass
