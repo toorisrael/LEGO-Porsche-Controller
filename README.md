@@ -12,6 +12,7 @@ I'm currently working on:
 - steering funcionality
 - 6LED funcionality
 - stall protection
+- joystick selection if required
 
 Usage:
 ```
