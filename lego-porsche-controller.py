@@ -7,9 +7,10 @@ from bleak import BleakClient, BleakScanner
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = '1'
 import pygame
 
-# Define engine channels in bytes
-engine1 = 0x32  # Byte value for the first engine channel
-engine2 = 0x33  # Byte value for the second engine channel
+# Define motors channels in bytes
+drivemotor1 = 0x32
+drivemotor2 = 0x33
+steeringmotor = 0x34
 debug = False
 last_power = 0
 
@@ -19,14 +20,73 @@ CHARACTERISTIC_UUID = "00001624-1212-efde-1623-785feabcd123"
 def calculate_power_byte(power_input):
     return int(power_input + 256 if power_input < 0 else power_input)
 
-async def send_motor_command(client, engine_channel, power_input):
+def normalize_angle(angle):
+    if angle >= 180:
+        return angle - (360 * ((angle + 180) // 360))
+    elif angle < -180:
+        return angle + (360 * ((180 - angle) // 360))
+    return angle
+
+async def reset_steering(client, channel, angle):
+    angle = normalize_angle(angle)
+    a0 = angle & 0xff
+    a1 = (angle >> 8) & 0xff
+    a2 = (angle >> 16) & 0xff
+    a3 = (angle >> 24) & 0xff
+
+    command = bytes([0x0b, 0x00, 0x81, channel, 0x11, 0x51, 0x02, a0, a1, a2, a3])
+    try:
+        await write_characteristic(client, CHARACTERISTIC_UUID, command)
+        if debug:
+            print(f"Sent reset_steering command to channel {channel}: {command.hex()}")
+        return True
+    except Exception as e:
+        print(f"Failed to send reset_steering command: {str(e)}")
+        return False
+    
+async def stop_steering(client, channel):
+    command = bytes([0x08, 0x00, 0x81, channel, 0x11, 0x51, 0x00, 0x00])
+    try:
+        await write_characteristic(client, CHARACTERISTIC_UUID, command)
+        if debug:
+            print(f"Sent stop_steering command to channel {channel}: {command.hex()}")
+        return True
+    except Exception as e:
+        print(f"Failed to send stop_steering command: {str(e)}")
+        return False
+    
+async def turn_steering(client, channel, angle, speed):
+    angle = normalize_angle(angle)
+    a0 = angle & 0xff
+    a1 = (angle >> 8) & 0xff
+    a2 = (angle >> 16) & 0xff
+    a3 = (angle >> 24) & 0xff
+
+    command = bytes([0x0e, 0x00, 0x81, channel, 0x11, 0x0d, a0, a1, a2, a3, speed, 0x64, 0x7e, 0x00])
+    try:
+        await write_characteristic(client, CHARACTERISTIC_UUID, command)
+        if debug:
+            print(f"Sent turn_steering command to channel {channel}: {command.hex()}")
+        return True
+    except Exception as e:
+        print(f"Failed to send turn_steering command {command.hex()}: {str(e)}")
+        return False
+    
+async def set_drive_motor_power(client, channel, power_input):
     power_byte = calculate_power_byte(power_input)
-    command = bytes([0x08, 0x00, 0x81, engine_channel, 0x11, 0x51, 0x00, power_byte])
+    command = bytes([0x08, 0x00, 0x81, channel, 0x11, 0x51, 0x00, power_byte])
     await write_characteristic(client, CHARACTERISTIC_UUID, command)
     if debug:
-        print(f"Sent motor command to channel {engine_channel}: {command.hex()}")
+        print(f"Sent set_drive_motor_power command to channel {channel}: {command.hex()}")
 
-
+async def autocalibrate_steering(client, channel):
+    await reset_steering(client, channel, 0)
+    await stop_steering(client, channel)
+    await turn_steering(client, channel, 0, 50)#todo this command will crash hub
+    await asyncio.sleep(0.6)
+    await stop_steering(client, channel)
+    await asyncio.sleep(0.5)
+    #todo... 
 
 async def connect_to_device(name):
     global client
@@ -115,8 +175,8 @@ def handle_controller_events(client):
                 power_input = 0
             if abs(power_input - last_power) > 5:
                 last_power = power_input
-                asyncio.create_task(send_motor_command(client, engine1, -power_input))
-                asyncio.create_task(send_motor_command(client, engine2, power_input))
+                asyncio.create_task(set_drive_motor_power(client, drivemotor1, -power_input))
+                asyncio.create_task(set_drive_motor_power(client, drivemotor2, power_input))
 
 async def read_input():
     loop = asyncio.get_event_loop()
@@ -173,6 +233,8 @@ async def main():
     joystick.init()
     
     print(f"Joystick name: {joystick.get_name()}")
+    
+    await autocalibrate_steering(client, steeringmotor)
 
     stop_event = asyncio.Event()
     
