@@ -12,3 +12,19 @@ I'm currently working on:
 - steering funcionality
 - 6LED funcionality
 - stall protection
+
+Usage:
+```
+python lego-porsche-controller.py
+Searching for LEGO Porsche car. Make sure it's on and blinking...
+Connected to Technic Move
+Firmware Version: 1.6.5.0
+Hardware Version: 0.3.0.0
+Battery level: 36%
+Joystick name: Xbox Series X Controller
+Enter data to write or type 'read' / 'exit' or use controller:
+exit
+
+Disconnected
+```
+Add -debug to print sending commands and controller inputs
