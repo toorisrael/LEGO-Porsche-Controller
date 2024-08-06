@@ -7,12 +7,14 @@ For now, it supports:
 - reading and writing Bluetooth Low Energy data to vehicle
 - reading battery level, HW and FW version
 - driving forward and backwards using XBox Controller
+- very basic steering right / left
 
 I'm currently working on:
-- steering funcionality
-- 6LED funcionality
+- steering improvements
+- 6LED switch
 - stall protection
 - joystick selection if required
+- checking battery level any time
 
 Usage:
 ```
