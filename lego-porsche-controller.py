@@ -83,12 +83,11 @@ async def steering_goto_pos(inputangle=None, power=25):
 				print(f"Current angle: {current_angle}, target angle: {angle}")
 			# Check if the current angle is satisfactory
 			if abs(current_angle - angle) <= steeringangletolerance:# or ((current_angle <= -steeringmaxangle+steeringangletolerance or current_angle >= steeringmaxangle-steeringangletolerance) and inputangle == None and (angle <= -steeringmaxangle+steeringangletolerance or angle >= steeringmaxangle-steeringangletolerance)):
+				command = bytes([0x08, 0x00, 0x81, steeringmotor, 0x11, 0x51, 0x00, 0x00])
+				await write_characteristic(CHARACTERISTIC_UUID, command)
+				currentlysteering = 0
 				if debug:
-					command = bytes([0x08, 0x00, 0x81, steeringmotor, 0x11, 0x51, 0x00, 0x00])
-					await write_characteristic(CHARACTERISTIC_UUID, command)
-					currentlysteering = 0
-					if debug:
-						print("Steering angle is close to target, stopping motor")
+					print("Steering angle is close to target, stopping motor")
 				if inputangle != None:
 					break
 			else:
@@ -97,8 +96,8 @@ async def steering_goto_pos(inputangle=None, power=25):
 				#	if debug:
 				#		print("Applying more power, requested angle: " + str(angle) + ", maxangle: " + str(steeringmaxangle-steeringangletolerance))
 				#else:
-				#	powermodified = power
-				powermodified = power
+				#	powermodified = abs(power)
+				powermodified = abs(power)
 				if current_angle < angle and currentlysteering <= 0:
 					command = bytes([0x08, 0x00, 0x81, steeringmotor, 0x11, 0x51, 0x00, calculate_power_byte(powermodified)])
 					currentlysteering = 1
@@ -149,7 +148,7 @@ async def autocalibrate_steering():#0A004134020000000001
 	tempcenteredangle = -(int(steeringrange/2))
 	calibrated = 1
 	await steering_goto_pos(tempcenteredangle, 20)
-	await asyncio.sleep(1.0)	
+	await asyncio.sleep(0.5)	
 	#reset encoder
 	command = bytes([0x0b, 0x00, 0x81, steeringmotor, 0x11, 0x51, 0x02, 0x00, 0x00, 0x00, 0x00])
 	await write_characteristic(CHARACTERISTIC_UUID, command)
