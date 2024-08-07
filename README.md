@@ -7,10 +7,9 @@ For now, it supports:
 - reading and writing Bluetooth Low Energy data to vehicle
 - reading battery level, HW and FW version
 - driving forward and backwards using XBox Controller
-- very basic steering right / left
+- steering right / left
 
 I'm currently working on:
-- steering improvements
 - 6LED switch
 - stall protection
 - joystick selection if required
@@ -43,3 +42,7 @@ Sources used for creating this project:
 [bleak](https://github.com/hbldh/bleak)
 
 [pygame](https://github.com/pygame)
+
+[LWP3 documentation](https://lego.github.io/lego-ble-wireless-protocol-docs/)
+
+[TechnicMoveHub](https://github.com/DanieleBenedettelli/TechnicMoveHub/)
