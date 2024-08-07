@@ -2,6 +2,7 @@ import asyncio
 import os
 import argparse
 from bleak import BleakClient, BleakScanner
+from struct import unpack
 
 # Hide Pygame support prompt
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = '1'
@@ -13,6 +14,8 @@ drivemotor2 = 0x33
 steeringmotor = 0x34
 leds = 0x35
 playvm = 0x36
+temperature = 0x37
+voltage = 0x3C
 hubled = 0x3F
 LIGHTS_ON_ON = 0
 LIGHTS_ON_BRAKING = 1
@@ -104,9 +107,28 @@ def process_hub_property_data(data):
 		return process_version_number(data, 5)
 	elif property_id == 0x04:  # HW version
 		return process_version_number(data, 5)
-	elif property_id == 0x06:  # Battery voltage
+	elif property_id == 0x06:  # Battery level
 		return str(data[5])
 	return None
+
+def process_voltage_or_temperature(data):
+	if len(data) != 2:
+		return 0.00
+	# unpack unsigned short little-endian
+	value = unpack('<H', data[:2])[0]
+	return value
+
+async def get_voltage():
+	await write_characteristic(bytes.fromhex("0700213C000100"))
+	data = await read_characteristic()
+	battery_voltage = process_voltage_or_temperature(data[4:6])/1000
+	print(f"Battery voltage: {battery_voltage:.3f}V")
+
+async def get_temperature():
+	await write_characteristic(bytes.fromhex("07002137000100"))
+	data = await read_characteristic()
+	hub_temperature = process_voltage_or_temperature(data[4:6])/10
+	print(f"HUB temperature: {hub_temperature:.1f}C")	
 
 def process_version_number(data, index):
 	if len(data) < index + 4:
@@ -157,11 +179,21 @@ def process_read_data(data):
 				buffer = buffer + " ??"
 		elif message_type == 0x45:
 			port = data[3]
-			buffer = buffer + "[Port Input subscribed data] Port " + str(int(port))
+			buffer = buffer + "[Port Input data] Port " + str(int(port))
 			if port == steeringmotor and len(data) == 8:# For our script, we assume we're getting steering angle here
 				angle = data[4:8]
 				angle = bytes_to_angle(angle)
 				buffer = buffer + " angle: " + str(angle) + "deg"
+			if port == temperature:
+				databytes = data[4:6]
+				value = process_voltage_or_temperature(databytes)/10
+				buffer = buffer + " temperature bytes: " + str(databytes.hex()) + f" [{value:.1f}C]"
+			if port == voltage:
+				databytes = data[4:6]
+				value = process_voltage_or_temperature(databytes)/1000
+				buffer = buffer + " voltage bytes: " + str(databytes.hex()) + f" [{value:.3f}V]"
+				
+
 		elif message_type == 0x47:
 			port = data[3]
 			buffer = buffer + "[Port Input subscribtion changed] Port " + str(int(port))
@@ -179,7 +211,7 @@ async def initialize_hub():
 	await write_characteristic(bytes.fromhex("0500010605"))
 	battery_data = await read_characteristic()
 	battery_percentage = process_hub_property_data(battery_data)
-	
+
 	# Change hub led color to green, so we're sure we're in control
 	await asyncio.sleep(1.0)
 	await write_characteristic(bytes.fromhex("0800813F11510006"))
@@ -188,6 +220,8 @@ async def initialize_hub():
 	print(f"Firmware Version: {firmware_version}")
 	print(f"Hardware Version: {hardware_version}")
 	print(f"Battery level: {battery_percentage}%\n")	
+	await get_voltage()
+	await get_temperature()
 	await autocalibrate_steering()
 	power_limit()
 
@@ -297,7 +331,7 @@ async def handle_controller_events():
 				if not brake_input:
 					await set_drive_motor_power(drivemotor1, -power_input_modified&0xFF)
 					await set_drive_motor_power(drivemotor2, power_input_modified&0xFF)
-				else: # engine braking
+				else: # engine braking # todo don't send when only lights or steering changed
 					await set_drive_motor_power(drivemotor1, 0x7F)
 					await set_drive_motor_power(drivemotor2, 0x7F)
 				# todo those can be send in one command
@@ -326,7 +360,10 @@ def power_limit(limit=None):
 			powerlimit = limit
 		else:
 			print("Power limit must be between 25 and 100")
-	print(f"Power limited to {powerlimit}%")
+	if limit == None or limit == 100:
+		print(f"Power limited to {powerlimit}%")
+	else:
+		print(f"Power is UNLIMITED")
 
 async def handle_terminal_commands(stop_event):
 	global powerlimit
@@ -349,14 +386,20 @@ async def handle_terminal_commands(stop_event):
 			await autocalibrate_steering()
 		elif command == "joystick":
 			await initialize_joystick()
+		elif command == "voltage":
+			await get_voltage()
+		elif command == "temp":
+			await get_temperature()
 		elif command == "power":
 			if len(parts) == 2 and parts[1].isdigit():
 				limit = int(parts[1])
 				power_limit(limit)
+			elif len(parts) == 1:
+				power_limit()
 			else:
 				print("Invalid power limit command. Usage: powerlimit <value>")
 		elif command == "help":
-			print("Available commands: exit, read, debug, debugon, debugoff, autocalibrate, joystick, help, power")
+			print("Available commands: exit, read, debug, debugon, debugoff, autocalibrate, joystick, help, power, voltage, temp")
 		else:
 			try:
 				data_bytes = bytes.fromhex(command)  # Zakładamy, że komenda to mogą być dane hex
@@ -404,17 +447,19 @@ async def controller_event_loop(stop_event):
 		pass
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="LEGO Porsche Controller")
-    parser.add_argument('-debug', action='store_true', help="Enable debug mode to print controller inputs")
-    parser.add_argument('-power', type=int, choices=range(25, 101), help="Set initial power limit (25-100)")
-    args = parser.parse_args()
+	parser = argparse.ArgumentParser(description="LEGO Porsche Controller")
+	parser.add_argument('-debug', action='store_true', help="Enable debug mode to print controller inputs")
+	parser.add_argument('-power', type=int, choices=range(25, 101), help="Set initial power limit (25-100)")
+	args = parser.parse_args()
 
-    debug = args.debug
-    if args.power is not None:
-        powerlimit = args.power
+	debug = args.debug
+	if args.power is not None:
+		powerlimit = args.power
 
-    asyncio.run(main())
+	asyncio.run(main())
 
 #todo telemetry
 #todo remember 6leds state for drive with playvm command
 #todo brake
+#todo steering with PLAYVM is probably slowing the drive motors for few msecs?
+#todo change some vars to definitions
