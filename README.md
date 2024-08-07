@@ -18,15 +18,18 @@ Usage:
 ```
 python lego-porsche-controller.py
 Searching for LEGO Porsche car. Make sure it's on and blinking...
+Debug mode is: OFF
 Connected to Technic Move
 Firmware Version: 1.6.5.0
 Hardware Version: 0.3.0.0
-Battery level: 36%
+Battery level: 56%
+Battery voltage: 3.653V
+HUB temperature: 27.8C
+Calibrating steering...
+Car is READY!
+Power is UNLIMITED
 Joystick name: Xbox Series X Controller
-Enter data to write or type 'read' / 'exit' or use controller:
-exit
-
-Disconnected
+Enter data to write, use controller or type 'help':
 ```
 Commandline
 ```
@@ -38,7 +41,9 @@ Commands
 anybytes         Write bytes to bluetooth LWP3 characteristic
 read             Read data from LWP3 characteristic
 autocalibrate    Recalibrate steering
-debug            Shows if debug mode enabled
+debug            Prints if debug mode is enabled or not
+voltage          Prints battery voltage
+temp             Prints HUB temperature
 debugon          Enable debug mode
 debugoff         Disable debug mode
 joystick         Initialize joystick (usefull if joy disconnected or not connected on start)
