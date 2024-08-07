@@ -219,7 +219,7 @@ async def initialize_hub():
 	print(f"Connected to {DEVICE_NAME}")
 	print(f"Firmware Version: {firmware_version}")
 	print(f"Hardware Version: {hardware_version}")
-	print(f"Battery level: {battery_percentage}%\n")	
+	print(f"Battery level: {battery_percentage}%")	
 	await get_voltage()
 	await get_temperature()
 	await autocalibrate_steering()
@@ -360,7 +360,7 @@ def power_limit(limit=None):
 			powerlimit = limit
 		else:
 			print("Power limit must be between 25 and 100")
-	if limit == None or limit == 100:
+	if limit != None or limit == 100:
 		print(f"Power limited to {powerlimit}%")
 	else:
 		print(f"Power is UNLIMITED")
