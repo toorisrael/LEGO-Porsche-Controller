@@ -10,10 +10,9 @@ For now, it supports:
 - steering right / left
 
 I'm currently working on:
-- 6LED switch
-- stall protection
 - joystick selection if required
 - checking battery level any time
+- telemetry
 
 Usage:
 ```
