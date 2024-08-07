@@ -14,9 +14,10 @@ steeringmotor = 0x34
 leds = 0x35
 playvm = 0x36
 hubled = 0x3F
-LIGHTS_OFF_OFF = 0b100
-LIGHTS_OFF_ON = 0b101
-LIGHTS_ON_ON = 0b000
+LIGHTS_ON_ON = 0
+LIGHTS_ON_BRAKING = 1
+LIGHTS_OFF_OFF = 4
+LIGHTS_OFF_BRAKING = 5
 
 # Globals
 client = None
@@ -25,6 +26,10 @@ joystick = None
 last_power_input = 0
 last_steering_input = 0
 stop_event = asyncio.Event()
+powerlimit = 100
+brakeapplied = False
+lightsplayvmstate = LIGHTS_OFF_OFF
+last_lights_input = False
 
 DEVICE_NAME = "Technic Move  "
 CHARACTERISTIC_UUID = "00001624-1212-efde-1623-785feabcd123"
@@ -80,7 +85,8 @@ async def write_characteristic(data):
 	except Exception as e:
 		print(f"Failed to write data  {data.hex()}: {e}")
 	else:
-		print(f"{data.hex()} written")
+		if debug:
+			print(f"{data.hex()} written")
 
 def process_hub_property_data(data):
 	if data is None or len(data) < 6:
@@ -183,6 +189,7 @@ async def initialize_hub():
 	print(f"Hardware Version: {hardware_version}")
 	print(f"Battery level: {battery_percentage}%\n")	
 	await autocalibrate_steering()
+	power_limit()
 
 	# Turn off 6led so we won't waste battery for now (led mask, power int 0-100) - this needs to be delayed, as the leds blink after connection first few seconds
 	await write_characteristic(bytes.fromhex("09008135115100ff00"))
@@ -202,26 +209,68 @@ async def autocalibrate_steering():
 	print("Calibrating steering...")
 	await write_characteristic(bytes.fromhex("0d008136115100030000001000"))
 	await write_characteristic(bytes.fromhex("0d008136115100030000000800"))
-	await asyncio.sleep(0.5)
+	await asyncio.sleep(1.5)
 	print("Car is READY!")
 
 async def handle_controller_events():
-	global last_power_input, last_steering_input
+	global last_power_input, last_steering_input, powerlimit, lightsplayvmstate, brakeapplied, last_lights_input
 	for event in pygame.event.get():
-		if event.type == pygame.JOYAXISMOTION:
+		if event.type == pygame.JOYAXISMOTION or event.type == pygame.JOYBUTTONDOWN or event.type == pygame.JOYBUTTONUP:
 			
+			# drive power
 			power_input = int(((joystick.get_axis(5)-joystick.get_axis(4)) * 100) / 2)
-			power_input_modified = power_input
-			if abs(power_input_modified) <= 10:
+			power_input_modified = int(power_input*(powerlimit*0.01))
+			if abs(power_input_modified) <= 15:
 				power_input_modified = 0
+			elif power_input_modified >= 95:
+				power_input_modified = 100
+			elif power_input_modified <= -95:
+				power_input_modified = -100
 			
+			# steering
 			steering_input = int(joystick.get_axis(0)*100)
 			steering_input_modified = steering_input
-			if abs(steering_input_modified) <= 1:
+			if abs(steering_input_modified) <= 2:
 				steering_input_modified = 0
+			elif steering_input_modified >= 95:
+				steering_input_modified = 100
+			elif steering_input_modified <= -95:
+				steering_input_modified = -100
+
+			# braking
+			brake_state_changed = False
+			brake_input = joystick.get_button(5)
+			if brake_input and not brakeapplied:
+				brake_state_changed = True
+				brakeapplied = True				
+			elif not brake_input and brakeapplied:
+				brake_state_changed = True
+				brakeapplied = False
+
+			# lights on/off
+			lights_state_changed = False
+			lights_input = 0
+			lights_input = joystick.get_button(3)
+			if event.type == pygame.JOYBUTTONDOWN:				
+				if lights_input and not last_lights_input:
+					if debug:
+						print("lights_input and not last_lights_input")
+					lights_state_changed = True
+					last_lights_input = True
+					if lightsplayvmstate == LIGHTS_ON_ON or lightsplayvmstate == LIGHTS_ON_BRAKING:
+						lightsplayvmstate = LIGHTS_OFF_OFF
+						if debug:
+							print("Lights changed from LIGHTS_ON_ON to LIGHTS_OFF_OFF")						
+					elif lightsplayvmstate == LIGHTS_OFF_OFF or lightsplayvmstate == LIGHTS_OFF_BRAKING:
+						lights_state_changed = True
+						lightsplayvmstate = LIGHTS_ON_ON
+						if debug:
+							print("Lights changed from LIGHTS_OFF_OFF to LIGHTS_ON_ON")
+			if event.type == pygame.JOYBUTTONUP and last_lights_input:
+				last_lights_input = False
 
 			if debug:
-				print(f"power_input: {power_input} (modified: {power_input_modified}), steering_input: {steering_input} (modified: {steering_input_modified})")
+				print(f"power_input: {power_input} (modified: {power_input_modified}), steering_input: {steering_input} (modified: {steering_input_modified}), brake_input: {brake_input}, lights_input: {lights_input}")
 
 			# Ignore power_input change for less than 5% and steering less than 3%
 			power_input_changed = False
@@ -233,11 +282,27 @@ async def handle_controller_events():
 				steering_input_changed = True
 				last_steering_input = steering_input_modified
 
+			if brake_input:
+				if lightsplayvmstate == LIGHTS_OFF_OFF:
+					lights = LIGHTS_OFF_BRAKING
+				elif lightsplayvmstate == LIGHTS_ON_ON:
+					lights = LIGHTS_ON_BRAKING
+			else: 
+				lights = lightsplayvmstate
 			# Send PLAYVM commands
-			if (power_input_changed or steering_input_changed) and client != None and client.is_connected():
-				lights = LIGHTS_OFF_OFF
-				command = bytes([0x0d, 0x00, 0x81, 0x36, 0x11, 0x51, 0x00, 0x03, 0x00, power_input_modified&0xFF, steering_input_modified&0xFF, lights&0xFF, 0x00])
+			if (power_input_changed or steering_input_changed or brake_state_changed or lights_state_changed) and client != None and client.is_connected:		
+				command = bytes([0x0d, 0x00, 0x81, 0x36, 0x11, 0x51, 0x00, 0x03, 0x00, 0x00, steering_input_modified&0xFF, lights, 0x00])
 				await write_characteristic(command)
+				# Send drive motor power commands directly to get instant response
+				if not brake_input:
+					await set_drive_motor_power(drivemotor1, -power_input_modified&0xFF)
+					await set_drive_motor_power(drivemotor2, power_input_modified&0xFF)
+				else: # engine braking
+					await set_drive_motor_power(drivemotor1, 0x7F)
+					await set_drive_motor_power(drivemotor2, 0x7F)
+				# todo those can be send in one command
+				
+				
 			elif debug:
 				print("Drive commands ignored due to low input change or HUB disconnected!")
 				
@@ -254,29 +319,47 @@ def debug_mode(status=None):
 		debug = status
 	print("Debug mode is:", "ON" if debug else "OFF")
 
+def power_limit(limit=None):
+	global powerlimit
+	if limit != None:
+		if limit and 25 <= limit <= 100:
+			powerlimit = limit
+		else:
+			print("Power limit must be between 25 and 100")
+	print(f"Power limited to {powerlimit}%")
+
 async def handle_terminal_commands(stop_event):
+	global powerlimit
 	async for cmd in read_input():
-		if cmd == "exit":
+		parts = cmd.split()  # Rozdziela komendę od argumentów
+		command = parts[0]
+		if command == "exit":
 			stop_event.set()
 			break
-		elif cmd == "read":
+		elif command == "read":
 			data = await read_characteristic()
 			process_read_data(data)
-		elif cmd == "debug":
+		elif command == "debug":
 			debug_mode()
-		elif cmd == "debugon":
+		elif command == "debugon":
 			debug_mode(True)
-		elif cmd == "debugoff":
+		elif command == "debugoff":
 			debug_mode(False)
-		elif cmd == "autocalibrate":
+		elif command == "autocalibrate":
 			await autocalibrate_steering()
-		elif cmd == "joystick":
+		elif command == "joystick":
 			await initialize_joystick()
-		elif cmd == "help":
-			print("Available commands: exit, read, debug, debugon, debugoff, autocalibrate, joystick, help")#todo: voltage, battery, temp
+		elif command == "power":
+			if len(parts) == 2 and parts[1].isdigit():
+				limit = int(parts[1])
+				power_limit(limit)
+			else:
+				print("Invalid power limit command. Usage: powerlimit <value>")
+		elif command == "help":
+			print("Available commands: exit, read, debug, debugon, debugoff, autocalibrate, joystick, help, power")
 		else:
 			try:
-				data_bytes = bytes.fromhex(cmd)
+				data_bytes = bytes.fromhex(command)  # Zakładamy, że komenda to mogą być dane hex
 				await write_characteristic(data_bytes)
 				print("Data written")
 				if debug:
@@ -284,6 +367,7 @@ async def handle_terminal_commands(stop_event):
 					process_read_data(data)
 			except ValueError:
 				print("Invalid hex data format or unknown command")
+
 
 async def main():
 	global client, joystick
@@ -320,11 +404,16 @@ async def controller_event_loop(stop_event):
 		pass
 
 if __name__ == "__main__":
-	parser = argparse.ArgumentParser(description="LEGO Porsche Controller")
-	parser.add_argument('-debug', action='store_true', help="Enable debug mode to print controller inputs")
-	args = parser.parse_args()
-	debug = args.debug
-	asyncio.run(main())
+    parser = argparse.ArgumentParser(description="LEGO Porsche Controller")
+    parser.add_argument('-debug', action='store_true', help="Enable debug mode to print controller inputs")
+    parser.add_argument('-power', type=int, choices=range(25, 101), help="Set initial power limit (25-100)")
+    args = parser.parse_args()
+
+    debug = args.debug
+    if args.power is not None:
+        powerlimit = args.power
+
+    asyncio.run(main())
 
 #todo telemetry
 #todo remember 6leds state for drive with playvm command
