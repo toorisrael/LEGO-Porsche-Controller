@@ -29,6 +29,24 @@ exit
 
 Disconnected
 ```
+Commandline
+```
+-debug           Enables debug mode
+-power x         Limits max drive power to value between 25% and 100% (for kids)
+```
+Commands
+```
+anybytes         Write bytes to bluetooth LWP3 characteristic
+read             Read data from LWP3 characteristic
+autocalibrate    Recalibrate steering
+debug            Shows if debug mode enabled
+debugon          Enable debug mode
+debugoff         Disable debug mode
+joystick         Initialize joystick (usefull if joy disconnected or not connected on start)
+power x          Limits max drive power to value between 25% and 100% (for kids)
+help             Show all available commands
+```
+
 Add -debug to print sending commands and controller inputs
 
 Sources used for creating this project:
