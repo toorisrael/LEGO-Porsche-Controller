@@ -38,7 +38,7 @@ Commandline
 ```
 Commands
 ```
-anybytes         Write bytes to bluetooth LWP3 characteristic
+00000000         Write any specified bytes to bluetooth LWP3 characteristic
 read             Read data from LWP3 characteristic
 autocalibrate    Recalibrate steering
 debug            Prints if debug mode is enabled or not
@@ -48,6 +48,8 @@ debugon          Enable debug mode
 debugoff         Disable debug mode
 joystick         Initialize joystick (usefull if joy disconnected or not connected on start)
 power x          Limits max drive power to value between 25% and 100% (for kids)
+angletobytes     Convert int angle to bytes representation used by gopos commands
+bytestoangle     Convert angle bytes to int angle
 help             Show all available commands
 ```
 
