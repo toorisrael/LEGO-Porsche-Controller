@@ -8,10 +8,11 @@ For now, it supports:
 - reading battery level, HW and FW version
 - driving forward and backwards using XBox Controller
 - steering right / left
+- lights on/off
+- cabin lights on/off
 
 I'm currently working on:
 - joystick selection if required
-- checking battery level any time
 - telemetry
 
 Usage:
