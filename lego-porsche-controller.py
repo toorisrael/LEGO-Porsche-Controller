@@ -36,7 +36,7 @@ last_lights_input = False
 
 DEVICE_NAME = "Technic Move  "
 CHARACTERISTIC_UUID = "00001624-1212-efde-1623-785feabcd123"
-#SERVICE_UUID = "00001624-1212-efde-1623-785feabcd123"
+#SERVICE_UUID = "00001623-1212-efde-1623-785feabcd123"
 
 def normalize_angle(angle):
 	if angle >= 180:
@@ -72,6 +72,14 @@ async def set_drive_motor_power(channel, power_byte):
 	await write_characteristic(command)
 	if debug:
 		print(f"Sent set_drive_motor_power command to channel {channel}: {command.hex()}")
+
+async def reset_encoder(channel):
+	command = bytes([0x0b, 0x00, 0x81, channel, 0x11, 0x51, 0x02, 0x00, 0x00, 0x00, 0x00])
+	await write_characteristic(command)
+
+#async def go_pos(channel, byte_array): # this is wrong
+#	command = bytes([0x0b, 0x00, 0x81, channel, 0x11, 0x51, 0x03, byte_array[0], byte_array[1]])
+#	await write_characteristic(command)
 
 async def connect_to_device(name):
 	global client
@@ -271,10 +279,11 @@ async def handle_controller_events():
 			steering_input_modified = steering_input
 			if abs(steering_input_modified) <= 2:
 				steering_input_modified = 0
-			elif steering_input_modified >= 95:
-				steering_input_modified = 100
-			elif steering_input_modified <= -95:
-				steering_input_modified = -100
+			# prevent triggering overcurrent protection in max steering input - calibration by PLAYVM is not super precise
+			elif steering_input_modified >= 94:
+				steering_input_modified = 94
+			elif steering_input_modified <= -94:
+				steering_input_modified = -94
 
 			# braking
 			brake_state_changed = False
@@ -365,7 +374,7 @@ def power_limit(limit=None):
 			powerlimit = limit
 		else:
 			print("Power limit must be between 25 and 100")
-	if limit != None or limit == 100:
+	if powerlimit != 100:
 		print(f"Power limited to {powerlimit}%")
 	else:
 		print(f"Power is UNLIMITED")
@@ -418,6 +427,7 @@ async def handle_terminal_commands(stop_event):
 					print(f"Angle bytes {anglebytes} int representation: {angle}")
 				except ValueError:
 					print("Invalid hex data format.")
+					print("Invalid bytestoangle command. Usage: bytestoangle angle (hex)")
 			else:
 				print("Invalid bytestoangle command. Usage: bytestoangle angle (hex)")
 		elif command == "help":
@@ -481,7 +491,7 @@ if __name__ == "__main__":
 	asyncio.run(main())
 
 #todo telemetry
-#todo steering with PLAYVM is probably slowing the drive motors for few msecs?
 #todo change some vars to definitions
 #todo replace all fromhex to command with bytes explained
 #todo sort commands help alphabetically
+#todo fix stalling drive motor on low power and fast steering inputs + drive direction changes
