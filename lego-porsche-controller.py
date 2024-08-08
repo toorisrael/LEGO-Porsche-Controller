@@ -286,7 +286,7 @@ async def autocalibrate_steering():
 async def handle_controller_events():
 	global last_power_input, last_steering_input, powerlimit, lightsplayvmstate, brakeapplied, last_lights_input, cabinlights, last_cabin_lights_input
 	for event in pygame.event.get():
-		if event.type == pygame.JOYAXISMOTION or event.type == pygame.JOYBUTTONDOWN:
+		if event.type == pygame.JOYAXISMOTION or event.type == pygame.JOYBUTTONDOWN or event.type == pygame.JOYBUTTONUP:
 			
 			# drive power
 			power_input = int(((joystick.get_axis(5)-joystick.get_axis(4)) * 100) / 2)
@@ -395,9 +395,10 @@ async def handle_controller_events():
 				# todo those can be send in one command maybe?				
 			elif debug:
 				print("Drive commands ignored due to low input change or HUB disconnected!")
-		elif event.type == pygame.JOYBUTTONUP:
+		if event.type == pygame.JOYBUTTONUP:
 			last_cabin_lights_input = joystick.get_button(1)
 			last_lights_input = joystick.get_button(3)
+			bra = joystick.get_button(5)
 
 				
 async def read_input():
