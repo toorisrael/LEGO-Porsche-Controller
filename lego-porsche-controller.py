@@ -50,7 +50,7 @@ def angle_to_bytes(angle):
 	a1 = (angle >> 8) & 0xff
 	a2 = (angle >> 16) & 0xff
 	a3 = (angle >> 24) & 0xff
-	return a0, a1, a2, a3
+	return bytes([a0, a1, a2, a3])
 
 def bytes_to_angle(byte_array):
 	if len(byte_array) != 4:
@@ -61,6 +61,11 @@ def bytes_to_angle(byte_array):
 	if angle >= 0x80000000:
 		angle -= 0x100000000	
 	return angle
+
+def is_integer(s):
+    if s[0] == '-':
+        return s[1:].isdigit()
+    return s.isdigit()
 
 async def set_drive_motor_power(channel, power_byte):
 	command = bytes([0x08, 0x00, 0x81, channel, 0x11, 0x51, 0x00, power_byte])
@@ -113,7 +118,7 @@ def process_hub_property_data(data):
 
 def process_voltage_or_temperature(data):
 	if len(data) != 2:
-		return 0.00
+		return 0
 	# unpack unsigned short little-endian
 	value = unpack('<H', data[:2])[0]
 	return value
@@ -398,11 +403,28 @@ async def handle_terminal_commands(stop_event):
 				power_limit()
 			else:
 				print("Invalid power limit command. Usage: powerlimit <value>")
+		elif command == "angletobytes":
+			if len(parts) == 2 and is_integer(parts[1]):
+				angle = int(parts[1])
+				anglebytes = angle_to_bytes(angle)
+				print(f"Angle {angle} bytes representation: {anglebytes.hex()}")
+			else:
+				print("Invalid angletobytes command. Usage: angletobytes angle (int)")
+		elif command == "bytestoangle":
+			if len(parts) == 2:
+				try:
+					anglebytes = parts[1]
+					angle = bytes_to_angle(bytes.fromhex(anglebytes))
+					print(f"Angle bytes {anglebytes} int representation: {angle}")
+				except ValueError:
+					print("Invalid hex data format.")
+			else:
+				print("Invalid bytestoangle command. Usage: bytestoangle angle (hex)")
 		elif command == "help":
-			print("Available commands: exit, read, debug, debugon, debugoff, autocalibrate, joystick, help, power, voltage, temp")
+			print("Available commands: exit, read, debug, debugon, debugoff, autocalibrate, joystick, help, power, voltage, temp, angletobytes, bytestoangle")
 		else:
 			try:
-				data_bytes = bytes.fromhex(command)  # Zakładamy, że komenda to mogą być dane hex
+				data_bytes = bytes.fromhex(command)
 				await write_characteristic(data_bytes)
 				print("Data written")
 				if debug:
@@ -459,7 +481,7 @@ if __name__ == "__main__":
 	asyncio.run(main())
 
 #todo telemetry
-#todo remember 6leds state for drive with playvm command
-#todo brake
 #todo steering with PLAYVM is probably slowing the drive motors for few msecs?
 #todo change some vars to definitions
+#todo replace all fromhex to command with bytes explained
+#todo sort commands help alphabetically
