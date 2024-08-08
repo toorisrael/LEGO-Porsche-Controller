@@ -39,21 +39,29 @@ Commandline
 Commands
 ```
 00000000         Write any specified bytes to bluetooth LWP3 characteristic
-read             Read data from LWP3 characteristic
+angletobytes     Convert int angle to bytes representation used by gopos commands
 autocalibrate    Recalibrate steering
+bytestoangle     Convert angle bytes to int angle
 debug            Prints if debug mode is enabled or not
-voltage          Prints battery voltage
-temp             Prints HUB temperature
-debugon          Enable debug mode
 debugoff         Disable debug mode
+debugon          Enable debug mode
+getledmask x     Get mask byte for specified LEDs, for example getledmask 0 0 1 0 0 0
+help             Show all available commands
 joystick         Initialize joystick (usefull if joy disconnected or not connected on start)
 power x          Limits max drive power to value between 25% and 100% (for kids)
-angletobytes     Convert int angle to bytes representation used by gopos commands
-bytestoangle     Convert angle bytes to int angle
-help             Show all available commands
+read             Read data from LWP3 characteristic
+temp             Prints HUB temperature
+voltage          Prints battery voltage
 ```
-
-Add -debug to print sending commands and controller inputs
+Xbox Controller
+```
+left joystick    steering
+right trigger    drive forward
+left trigger     drive backwards
+right bumper     brake
+Y button         lights on/off
+B button         cabin lights on/off
+```
 
 Sources used for creating this project:
 
