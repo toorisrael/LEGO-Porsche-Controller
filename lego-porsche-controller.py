@@ -1,26 +1,13 @@
 import asyncio
 import os
 import argparse
+from utils.lwp3_definitions import *
 from bleak import BleakClient, BleakScanner
 from struct import unpack
 
 # Hide Pygame support prompt
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = '1'
 import pygame
-
-# Define channels in bytes
-drivemotor1 = 0x32
-drivemotor2 = 0x33
-steeringmotor = 0x34
-leds = 0x35
-playvm = 0x36
-temperature = 0x37
-voltage = 0x3C
-hubled = 0x3F
-LIGHTS_ON_ON = 0
-LIGHTS_ON_BRAKING = 1
-LIGHTS_OFF_OFF = 4
-LIGHTS_OFF_BRAKING = 5
 
 # Globals
 client = None
@@ -33,10 +20,12 @@ powerlimit = 100
 brakeapplied = False
 lightsplayvmstate = LIGHTS_OFF_OFF
 last_lights_input = False
+cabinlights = False
+last_cabin_lights_input = False
 
-DEVICE_NAME = "Technic Move  "
-CHARACTERISTIC_UUID = "00001624-1212-efde-1623-785feabcd123"
-#SERVICE_UUID = "00001623-1212-efde-1623-785feabcd123"
+def create_command(*args):
+	command = bytes([len(args) + 2] + [MESSAGE_HEADER] + list(args))
+	return command
 
 def normalize_angle(angle):
 	if angle >= 180:
@@ -63,32 +52,53 @@ def bytes_to_angle(byte_array):
 	return angle
 
 def is_integer(s):
-    if s[0] == '-':
-        return s[1:].isdigit()
-    return s.isdigit()
+	if s[0] == '-':
+		return s[1:].isdigit()
+	return s.isdigit()
 
 async def set_drive_motor_power(channel, power_byte):
-	command = bytes([0x08, 0x00, 0x81, channel, 0x11, 0x51, 0x00, power_byte])
+	command = create_command(PORT_OUTPUT_COMMAND, channel, FEEDBACK_ACTION_BOTH, PORT_OUTPUT_SUBCOMMAND_WRITE_DIRECT, PORT_MODE_0, power_byte)
 	await write_characteristic(command)
 	if debug:
 		print(f"Sent set_drive_motor_power command to channel {channel}: {command.hex()}")
 
 async def reset_encoder(channel):
-	command = bytes([0x0b, 0x00, 0x81, channel, 0x11, 0x51, 0x02, 0x00, 0x00, 0x00, 0x00])
-	await write_characteristic(command)
+	await write_characteristic(create_command(PORT_OUTPUT_COMMAND, channel, FEEDBACK_ACTION_BOTH, PORT_OUTPUT_SUBCOMMAND_WRITE_DIRECT, PORT_MODE_2, 0x00, 0x00, 0x00, 0x00)) # angle bytes for 0 degrees
+
+def get_led_mask(led_states):
+	if len(led_states) != 6:
+		raise ValueError("There must be exactly 6 LED states provided.")
+	
+	mask = 0
+	for index, state in enumerate(led_states):
+		if state:
+			mask |= (1 << index)
+	return mask
 
 #async def go_pos(channel, byte_array): # this is wrong
 #	command = bytes([0x0b, 0x00, 0x81, channel, 0x11, 0x51, 0x03, byte_array[0], byte_array[1]])
 #	await write_characteristic(command)
 
-async def connect_to_device(name):
+async def connect_to_device(name, max_attempts=10):
 	global client
-	devices = await BleakScanner.discover()
-	for device in devices:
-		if device.name == name:
-			client = BleakClient(device.address)
-			await client.connect()
-			return client
+	attempt = 0
+	while attempt < max_attempts:
+		attempt += 1
+		if debug:
+			print(f"Connection attempt {attempt}/{max_attempts}")
+		devices = await BleakScanner.discover(timeout=3)
+		for device in devices:
+			if device.name == name:
+				client = BleakClient(device.address)
+				try:
+					await client.connect()
+					return client
+				except Exception as e:
+					print(f"Failed to connect: {e}")
+		if debug:
+			print("Device not found, retrying...")
+		await asyncio.sleep(1)  # optional: delay before next attempt
+	print("Failed to connect after maximum attempts.")
 	return None
 
 async def read_characteristic():
@@ -108,20 +118,21 @@ def process_hub_property_data(data):
 	if data is None or len(data) < 6:
 		return None
 
-	data_length = data[0]
 	message_id = data[2]
 	property_id = data[3]
 	property_operation = data[4]
 
-	if message_id != 0x01 or property_operation != 0x06:
+	if message_id != HUB_PROPERTY or property_operation != HUB_PROPERTY_OPERATION_UPDATE:
 		return None
 
-	if property_id == 0x03:  # FW version
+	if property_id == HUB_PROPERTY_FW:
 		return process_version_number(data, 5)
-	elif property_id == 0x04:  # HW version
+	elif property_id == HUB_PROPERTY_HW:
 		return process_version_number(data, 5)
-	elif property_id == 0x06:  # Battery level
+	elif property_id == HUB_PROPERTY_BATTERY_LEVEL:
 		return str(data[5])
+	elif property_id == HUB_PROPERTY_LWP:
+		return process_lwp_version_number(data, 5)
 	return None
 
 def process_voltage_or_temperature(data):
@@ -131,26 +142,29 @@ def process_voltage_or_temperature(data):
 	value = unpack('<H', data[:2])[0]
 	return value
 
-async def get_voltage():
-	await write_characteristic(bytes.fromhex("0700213C000100"))
+async def get_battery_info():
+	await write_characteristic(create_command(PORT_INPUT_INFORMATION_REQUEST, PORT_VOLTAGE, FEEDBACK_ACTION_NO_ACTION, 0x01, 0x00)) # port mode? updates count? mode combinations?
 	data = await read_characteristic()
 	battery_voltage = process_voltage_or_temperature(data[4:6])/1000
-	print(f"Battery voltage: {battery_voltage:.3f}V")
+
+	await write_characteristic(create_command(HUB_PROPERTY, HUB_PROPERTY_BATTERY_LEVEL, HUB_PROPERTY_OPERATION_REQUEST_UPDATE))
+	battery_level = await read_characteristic()
+	battery_level = process_hub_property_data(battery_level)
+	
+	print(f"Battery voltage: {battery_voltage:.3f}V [{battery_level}%]")
 
 async def get_temperature():
-	await write_characteristic(bytes.fromhex("07002137000100"))
+	await write_characteristic(create_command(PORT_INPUT_INFORMATION_REQUEST, PORT_TEMPERATURE, FEEDBACK_ACTION_NO_ACTION, 0x01, 0x00))
 	data = await read_characteristic()
 	hub_temperature = process_voltage_or_temperature(data[4:6])/10
+	
 	print(f"HUB temperature: {hub_temperature:.1f}C")	
 
 def process_version_number(data, index):
 	if len(data) < index + 4:
 		return ''
 
-	v0 = data[index]
-	v1 = data[index + 1]
-	v2 = data[index + 2]
-	v3 = data[index + 3]
+	v0, v1, v2, v3 = unpack('>BBBB', data[index:index + 4])
 
 	major = v3 >> 4
 	minor = v3 & 0xf
@@ -159,30 +173,41 @@ def process_version_number(data, index):
 
 	return f"{major}.{minor}.{bugfix}.{build}"
 
+def process_lwp_version_number(data, index):
+	if len(data) < index + 2:
+		return ''
+
+	version_number = unpack('>H', data[index:index + 2])[0]
+
+	major = (version_number >> 12) * 1000 + ((version_number >> 8) & 0xF) * 100 + ((version_number >> 4) & 0xF) * 10 + (version_number & 0xF)
+	minor = ((version_number >> 4) & 0xF) * 10 + (version_number & 0xF)
+
+	return f"{major}.{minor}"
+
 def process_read_data(data):
 	buffer = ""
 	if len(data) >= 5:
 		data_length = data[0]
 		message_type = data[2]
-		if message_type == 0x05:
+		if message_type == MESSAGE_TYPE_ERROR:
 			buffer = buffer + "[Error]"
 			commandtype = data[3]
 			errortype = data[4]
-			if commandtype == 0x81:
+			if commandtype == PORT_OUTPUT_COMMAND:
 				buffer = buffer + " Port Output Command"                
-				if errortype == 0x05:
+				if errortype == ERROR_COMMAND_NOT_RECOGNIZED:
 					buffer = buffer + "->Command NOT recognized"
-				elif errortype == 0x06:
+				elif errortype == ERROR_INVALID_USE:
 					buffer = buffer + "->Invalid use (e.g. parameter error(s))"
-			elif commandtype == 0x41:
+			elif commandtype == PORT_INPUT_COMMAND:
 				buffer = buffer + " Port Input Command" 
-				if errortype == 0x05:
+				if errortype == ERROR_COMMAND_NOT_RECOGNIZED:
 					buffer = buffer + "->Command NOT recognized"
-				elif errortype == 0x06:
+				elif errortype == ERROR_INVALID_USE:
 					buffer = buffer + "->Invalid use (e.g. parameter error(s))"
-			elif commandtype == 0x00:
+			elif commandtype == ERROR_GENERIC:
 				buffer = buffer + " Generic (wrong size??)"
-		elif message_type == 0x82:        
+		elif message_type == MESSAGE_TYPE_PORT_OUTPUT_COMMAND_FEEDBACK:        
 			port = data[3]
 			status = data[4]
 			buffer = buffer + "[Port Output Command Feedback] Port " + str(int(port))
@@ -190,56 +215,55 @@ def process_read_data(data):
 				buffer = buffer + " OK"
 			else:
 				buffer = buffer + " ??"
-		elif message_type == 0x45:
+		elif message_type == MESSAGE_TYPE_PORT_VALUE:
 			port = data[3]
-			buffer = buffer + "[Port Input data] Port " + str(int(port))
-			if port == steeringmotor and len(data) == 8:# For our script, we assume we're getting steering angle here
+			buffer = buffer + "[Port Value] Port " + str(int(port))
+			if port == PORT_STEERING_MOTOR and len(data) == 8:# For our script, we assume we're getting steering angle here
 				angle = data[4:8]
 				angle = bytes_to_angle(angle)
 				buffer = buffer + " angle: " + str(angle) + "deg"
-			if port == temperature:
+			if port == PORT_TEMPERATURE:
 				databytes = data[4:6]
 				value = process_voltage_or_temperature(databytes)/10
 				buffer = buffer + " temperature bytes: " + str(databytes.hex()) + f" [{value:.1f}C]"
-			if port == voltage:
+			if port == PORT_VOLTAGE:
 				databytes = data[4:6]
 				value = process_voltage_or_temperature(databytes)/1000
 				buffer = buffer + " voltage bytes: " + str(databytes.hex()) + f" [{value:.3f}V]"
-				
-
 		elif message_type == 0x47:
 			port = data[3]
 			buffer = buffer + "[Port Input subscribtion changed] Port " + str(int(port))
 	print(f"Read data: {data.hex()} {buffer}")
 
 async def initialize_hub():
-	await write_characteristic(bytes.fromhex("0500010305"))
+	await write_characteristic(create_command(HUB_PROPERTY, HUB_PROPERTY_FW, HUB_PROPERTY_OPERATION_REQUEST_UPDATE))
 	fw_data = await read_characteristic()
 	firmware_version = process_hub_property_data(fw_data)
 
-	await write_characteristic(bytes.fromhex("0500010405"))
+	await write_characteristic(create_command(HUB_PROPERTY, HUB_PROPERTY_HW, HUB_PROPERTY_OPERATION_REQUEST_UPDATE))
 	hw_data = await read_characteristic()
 	hardware_version = process_hub_property_data(hw_data)
 
-	await write_characteristic(bytes.fromhex("0500010605"))
-	battery_data = await read_characteristic()
-	battery_percentage = process_hub_property_data(battery_data)
+	await write_characteristic(create_command(HUB_PROPERTY, HUB_PROPERTY_LWP, HUB_PROPERTY_OPERATION_REQUEST_UPDATE))
+	lwp_data = await read_characteristic()
+	lwp_version = process_hub_property_data(lwp_data)
 
 	# Change hub led color to green, so we're sure we're in control
 	await asyncio.sleep(1.0)
-	await write_characteristic(bytes.fromhex("0800813F11510006"))
+	await write_characteristic(create_command(PORT_OUTPUT_COMMAND, PORT_HUB_LED, FEEDBACK_ACTION_BOTH, PORT_OUTPUT_SUBCOMMAND_WRITE_DIRECT, HUB_LED_MODE_COLOR, HUB_LED_COLOR_GREEN))
 	
 	print(f"Connected to {DEVICE_NAME}")
 	print(f"Firmware Version: {firmware_version}")
 	print(f"Hardware Version: {hardware_version}")
-	print(f"Battery level: {battery_percentage}%")	
-	await get_voltage()
+	print(f"LWP Version: {lwp_version}")
+	await get_battery_info()
 	await get_temperature()
 	await autocalibrate_steering()
 	power_limit()
 
-	# Turn off 6led so we won't waste battery for now (led mask, power int 0-100) - this needs to be delayed, as the leds blink after connection first few seconds
-	await write_characteristic(bytes.fromhex("09008135115100ff00"))
+	# Turn off 6led so we won't waste battery for now (led mask, power int 0-100)
+	#await write_characteristic(create_command(PORT_OUTPUT_COMMAND, PORT_6LEDS, FEEDBACK_ACTION_BOTH, PORT_OUTPUT_SUBCOMMAND_WRITE_DIRECT, PORT_MODE_0, 0xff, 0x00))
+	await write_characteristic(create_command(PORT_OUTPUT_COMMAND, PORT_PLAYVM, FEEDBACK_ACTION_BOTH, PORT_OUTPUT_SUBCOMMAND_WRITE_DIRECT, PORT_MODE_0, 0x03, 0x00, 0x00, 0x00, LIGHTS_OFF_OFF, 0x00))
 
 async def initialize_joystick():
 	global joystick
@@ -254,15 +278,15 @@ async def initialize_joystick():
 
 async def autocalibrate_steering():
 	print("Calibrating steering...")
-	await write_characteristic(bytes.fromhex("0d008136115100030000001000"))
-	await write_characteristic(bytes.fromhex("0d008136115100030000000800"))
-	await asyncio.sleep(1.5)
+	# "Special" PLAYVM commands to calibrate steering
+	await write_characteristic(create_command(PORT_OUTPUT_COMMAND, PORT_PLAYVM, FEEDBACK_ACTION_BOTH, PORT_OUTPUT_SUBCOMMAND_WRITE_DIRECT, PORT_MODE_0, 0x03, 0x00, 0x00, 0x00, 0x10, 0x00))
+	await write_characteristic(create_command(PORT_OUTPUT_COMMAND, PORT_PLAYVM, FEEDBACK_ACTION_BOTH, PORT_OUTPUT_SUBCOMMAND_WRITE_DIRECT, PORT_MODE_0, 0x03, 0x00, 0x00, 0x00, 0x08, 0x00))
 	print("Car is READY!")
 
 async def handle_controller_events():
-	global last_power_input, last_steering_input, powerlimit, lightsplayvmstate, brakeapplied, last_lights_input
+	global last_power_input, last_steering_input, powerlimit, lightsplayvmstate, brakeapplied, last_lights_input, cabinlights, last_cabin_lights_input
 	for event in pygame.event.get():
-		if event.type == pygame.JOYAXISMOTION or event.type == pygame.JOYBUTTONDOWN or event.type == pygame.JOYBUTTONUP:
+		if event.type == pygame.JOYAXISMOTION or event.type == pygame.JOYBUTTONDOWN:
 			
 			# drive power
 			power_input = int(((joystick.get_axis(5)-joystick.get_axis(4)) * 100) / 2)
@@ -279,11 +303,13 @@ async def handle_controller_events():
 			steering_input_modified = steering_input
 			if abs(steering_input_modified) <= 2:
 				steering_input_modified = 0
-			# prevent triggering overcurrent protection in max steering input - calibration by PLAYVM is not super precise
-			elif steering_input_modified >= 94:
-				steering_input_modified = 94
-			elif steering_input_modified <= -94:
-				steering_input_modified = -94
+			# Prevent triggering overcurrent protection at max steering input - calibration by PLAYVM is not super precise
+			# limiting to 94% is enough to prevent overcurrent, 88 should be good to prevent stall
+			# todo: adjust joystick input to get linear 0-88%
+			elif steering_input_modified >= 88:
+				steering_input_modified = 88
+			elif steering_input_modified <= -88:
+				steering_input_modified = -88
 
 			# braking
 			brake_state_changed = False
@@ -295,9 +321,28 @@ async def handle_controller_events():
 				brake_state_changed = True
 				brakeapplied = False
 
+			# cabin lights on/off
+			cabin_lights_input = joystick.get_button(1)
+			if event.type == pygame.JOYBUTTONDOWN:				
+				if cabin_lights_input and not last_cabin_lights_input:
+					if debug:
+						print("cabin_lights_input and not last_cabin_lights_input")
+					last_cabin_lights_input = True
+					if cabinlights == True:
+						cabinlights = False
+						if debug:
+							print("Cabin lights changed from True to False")						
+					else:
+						cabinlights = True
+						if debug:
+							print("Cabin lights changed from False to True")
+					cabinlightsbyte = 100 if cabinlights else 0
+					await write_characteristic(create_command(PORT_OUTPUT_COMMAND, PORT_6LEDS, FEEDBACK_ACTION_BOTH, PORT_OUTPUT_SUBCOMMAND_WRITE_DIRECT, PORT_MODE_0, get_led_mask([1, 0, 0, 1, 0, 0]), cabinlightsbyte))
+			if event.type == pygame.JOYBUTTONUP and last_cabin_lights_input:
+				last_cabin_lights_input = False
+
 			# lights on/off
 			lights_state_changed = False
-			lights_input = 0
 			lights_input = joystick.get_button(3)
 			if event.type == pygame.JOYBUTTONDOWN:				
 				if lights_input and not last_lights_input:
@@ -326,7 +371,7 @@ async def handle_controller_events():
 			if abs(power_input_modified - last_power_input) >= 5:
 				power_input_changed = True
 				last_power_input = power_input_modified
-			if abs(steering_input_modified - last_steering_input):
+			if abs(steering_input_modified - last_steering_input) >= 3:
 				steering_input_changed = True
 				last_steering_input = steering_input_modified
 
@@ -339,21 +384,21 @@ async def handle_controller_events():
 				lights = lightsplayvmstate
 			# Send PLAYVM commands
 			if (power_input_changed or steering_input_changed or brake_state_changed or lights_state_changed) and client != None and client.is_connected:		
-				command = bytes([0x0d, 0x00, 0x81, 0x36, 0x11, 0x51, 0x00, 0x03, 0x00, 0x00, steering_input_modified&0xFF, lights, 0x00])
-				await write_characteristic(command)
+				await write_characteristic(create_command(PORT_OUTPUT_COMMAND, PORT_PLAYVM, FEEDBACK_ACTION_BOTH, PORT_OUTPUT_SUBCOMMAND_WRITE_DIRECT, PORT_MODE_0, 0x03, 0x00, 0x00, steering_input_modified&0xFF, lights, 0x00))
 				# Send drive motor power commands directly to get instant response
 				if not brake_input:
-					await set_drive_motor_power(drivemotor1, -power_input_modified&0xFF)
-					await set_drive_motor_power(drivemotor2, power_input_modified&0xFF)
+					await set_drive_motor_power(PORT_DRIVE_MOTOR_1, -power_input_modified&0xFF)
+					await set_drive_motor_power(PORT_DRIVE_MOTOR_2, power_input_modified&0xFF)
 				else: # engine braking # todo don't send when only lights or steering changed
-					await set_drive_motor_power(drivemotor1, 0x7F)
-					await set_drive_motor_power(drivemotor2, 0x7F)
-				# todo those can be send in one command
-				
-				
+					await set_drive_motor_power(PORT_DRIVE_MOTOR_1, 0x7F)
+					await set_drive_motor_power(PORT_DRIVE_MOTOR_2, 0x7F)
+				# todo those can be send in one command maybe?				
 			elif debug:
 				print("Drive commands ignored due to low input change or HUB disconnected!")
-				
+		elif event.type == pygame.JOYBUTTONUP:
+			last_cabin_lights_input = joystick.get_button(1)
+			last_lights_input = joystick.get_button(3)
+
 				
 async def read_input():
 	loop = asyncio.get_event_loop()
@@ -401,7 +446,7 @@ async def handle_terminal_commands(stop_event):
 		elif command == "joystick":
 			await initialize_joystick()
 		elif command == "voltage":
-			await get_voltage()
+			await get_battery_info()
 		elif command == "temp":
 			await get_temperature()
 		elif command == "power":
@@ -412,6 +457,13 @@ async def handle_terminal_commands(stop_event):
 				power_limit()
 			else:
 				print("Invalid power limit command. Usage: powerlimit <value>")
+		elif command == "getledmask":
+			if len(parts) == 7 and all(part.isdigit() for part in parts[1:]):
+				led_states = [bool(int(arg)) for arg in parts[1:]]
+				mask = get_led_mask(led_states)
+				print(f"Generated LED mask: {mask:02x}")
+			else:
+				print("Invalid getledmask command. Usage example: getledmask 0 0 1 0 0 0")
 		elif command == "angletobytes":
 			if len(parts) == 2 and is_integer(parts[1]):
 				angle = int(parts[1])
@@ -430,8 +482,9 @@ async def handle_terminal_commands(stop_event):
 					print("Invalid bytestoangle command. Usage: bytestoangle angle (hex)")
 			else:
 				print("Invalid bytestoangle command. Usage: bytestoangle angle (hex)")
-		elif command == "help":
-			print("Available commands: exit, read, debug, debugon, debugoff, autocalibrate, joystick, help, power, voltage, temp, angletobytes, bytestoangle")
+		elif command == "help":			
+			print("Available commands: angletobytes, autocalibrate, bytestoangle, debug, debugoff, debugon, exit, getledmask, help, joystick, power, read, temp, voltage")
+			print("'read' is automatically called after any write in debug-mode")
 		else:
 			try:
 				data_bytes = bytes.fromhex(command)
@@ -491,7 +544,4 @@ if __name__ == "__main__":
 	asyncio.run(main())
 
 #todo telemetry
-#todo change some vars to definitions
-#todo replace all fromhex to command with bytes explained
-#todo sort commands help alphabetically
 #todo fix stalling drive motor on low power and fast steering inputs + drive direction changes
